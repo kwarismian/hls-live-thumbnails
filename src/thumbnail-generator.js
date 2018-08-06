@@ -337,7 +337,7 @@ ThumbnailGenerator.prototype._generateThumbnails = function(segment, segmentSN, 
 						// might have been just past the end of the file
 						return Promise.resolve(null);
 					}
-					var newFileName = segmentBaseName+"-"+i+".jpg";
+					var newFileName = segmentBaseName+"-"+i+"_"+this._trackType+".jpg";
 					var newLocation = path.join(this._outputDir, newFileName);
 					return utils.ensureExists(this._outputDir).then(() => {
 						return utils.move(location, newLocation).then(() => {
@@ -501,7 +501,9 @@ ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentF
 			var file2 = files[1][0];
 			if(!file1 || !file2)
 			{
-				reject(null);
+				this._clean(files).then(() => {
+					reject(null);
+				});
 			}
 			else
 			{
@@ -511,14 +513,22 @@ ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentF
 				.output(outputBaseFilePath+"-combined.png")
 				.on('end', (stdout, stderr) => {
 					utils.exists(outputBaseFilePath+"-combined.png").then((exists) => {
+						this._clean(files).then(() => {
+							resolve([outputBaseFilePath+"-combined.png"]);
+						})
+						
 						// ffmpeg might fail if the time is right near the end as the duration of the file might be slightly off
-						resolve([outputBaseFilePath+"-combined.png"]);
+						
 					}).catch((err) => {
-						reject(err);
+						this._clean(files).then(() => {
+							reject(err);
+						});
 					});
 				})
 				.on("error", (err) => {
-					reject(err);
+					this._clean(files).then(() => {
+						reject(err);
+					});
 				}).run();
 			}
 			
@@ -527,6 +537,29 @@ ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentF
 	
 	//return Promise.resolve(files);
 };
+
+ThumbnailGenerator.prototype._unwrapInnerFiles = function(files){
+	if(Array.isArray(files))
+	{
+		return files.reduce((acc, val) => acc.concat(val), []);
+	}
+	
+	return files;
+	
+}
+
+ThumbnailGenerator.prototype._clean = function(files) {
+	var promises = [];
+
+	var flattenedFiles = this._unwrapInnerFiles(files);
+		for(var file in flattenedFiles)
+		{
+			if(flattenedFiles[file] != null)
+			promises.push(utils.delete(flattenedFiles[file]));
+		}
+	
+	return Promise.all(promises);
+}
 
 // round to 3 decimal places for ffmpeg
 ThumbnailGenerator.prototype._roundFfmpeg = function(num) {

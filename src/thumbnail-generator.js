@@ -38,7 +38,7 @@ function ThumbnailGenerator(options) {
 		interval: null,
 		targetThumbnailCount: !options.interval ? 30 : null,
 		thumbnailWidth: !options.thumbnailHeight ? 150 : null,
-		trackAudio: false,
+		trackType: null,
 		thumbnailHeight: null,
 		outputNamePrefix: null,
 		logger: Logger.get('ThumbnailGenerator')
@@ -67,7 +67,7 @@ function ThumbnailGenerator(options) {
 	this._tempDir = opts.tempDir;
 	this._outputNamePrefix = opts.outputNamePrefix;
 	this._logger = opts.logger || nullLogger;
-	this._trackAudio = opts.trackAudio;
+	this._trackType = opts.trackType;
 
 	this._resolvedPlaylistUrl = null;
 	this._segmentTargetDuration = null;
@@ -311,9 +311,13 @@ ThumbnailGenerator.prototype._generateThumbnails = function(segment, segmentSN, 
 			var segmentFileLocation = path.join(this._tempDir, segmentBaseName+"."+extension);
 			return utils.writeFile(segmentFileLocation, buffer).then(() => {
 				var outputBaseFilePath = path.join(this._tempDir, segmentBaseName);
-				if(this._trackAudio)
+				if(this._trackType === "both")
 				{
 					return this._generateThumbnailsWithWaveform(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath);
+				}
+				else if(this._trackType === "audio")
+				{
+					return this._generateWaveformThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath);
 				}
 				return this._generateThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath);
 			}).catch((err) => {

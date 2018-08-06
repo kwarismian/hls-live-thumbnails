@@ -38,6 +38,7 @@ function ThumbnailGenerator(options) {
 		interval: null,
 		targetThumbnailCount: !options.interval ? 30 : null,
 		thumbnailWidth: !options.thumbnailHeight ? 150 : null,
+		trackAudio: false,
 		thumbnailHeight: null,
 		outputNamePrefix: null,
 		logger: Logger.get('ThumbnailGenerator')
@@ -60,10 +61,13 @@ function ThumbnailGenerator(options) {
 	this._interval = opts.interval;
 	this._initialThumbnailCount = opts.initialThumbnailCount;
 	this._thumbnailSize = this._buildFfmpegSize(opts.thumbnailWidth, opts.thumbnailHeight);
+	this._thumbnailWidth = opts.thumbnailWidth;
+	this._thumbnailHeight = opts.thumbnailHeight;
 	this._outputDir = opts.outputDir;
 	this._tempDir = opts.tempDir;
 	this._outputNamePrefix = opts.outputNamePrefix;
 	this._logger = opts.logger || nullLogger;
+	this._trackAudio = opts.trackAudio;
 
 	this._resolvedPlaylistUrl = null;
 	this._segmentTargetDuration = null;
@@ -217,11 +221,12 @@ ThumbnailGenerator.prototype._grabThumbnails = function() {
 				var startTime = time;
 				var endTime = time + segment.properties.duration;
 				time = endTime;
-
+				
 				if (endTime > nextThumbnailTime) {
 					// generate thumbnails from this file
 					// the start time could be negative if the last thumbnail for the last segment failed
 					var timeIntoSegment = Math.max(0, nextThumbnailTime-startTime);
+					
 					return this._generateThumbnails(segment, sn, timeIntoSegment).then((thumbnailData) => {
 						if (this._destroyed) {
 							return;
@@ -306,6 +311,10 @@ ThumbnailGenerator.prototype._generateThumbnails = function(segment, segmentSN, 
 			var segmentFileLocation = path.join(this._tempDir, segmentBaseName+"."+extension);
 			return utils.writeFile(segmentFileLocation, buffer).then(() => {
 				var outputBaseFilePath = path.join(this._tempDir, segmentBaseName);
+				if(this._trackAudio)
+				{
+					return this._generateThumbnailsWithWaveform(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath);
+				}
 				return this._generateThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath);
 			}).catch((err) => {
 				utils.unlink(segmentFileLocation);
@@ -419,6 +428,27 @@ ThumbnailGenerator.prototype._generateThumbnailWithFfmpeg = function(segmentFile
 	});
 };
 
+ThumbnailGenerator.prototype._generateWaveformThumbnailWithFfmpeg = function(segmentFileLocation, timeIntoSegment, outputFilePath) {
+	return new Promise((resolve, reject) => {
+		var command = new Ffmpeg({
+		}).input(segmentFileLocation)
+		.complexFilter(["compand,showwavespic=s="+this._thumbnailWidth+"x100"])
+		.frames(1)
+		.output(outputFilePath)
+		.on('end', (stdout, stderr) => {
+			utils.exists(outputFilePath).then((exists) => {
+				// ffmpeg might fail if the time is right near the end as the duration of the file might be slightly off
+				resolve(exists);
+			}).catch((err) => {
+				reject(err);
+			});
+		})
+		.on("error", (err) => {
+			reject(err);
+		}).run();
+	});
+};
+
 ThumbnailGenerator.prototype._generateThumbnailsWithFfmpeg = function(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath) {
 	var time = timeIntoSegment;
 	var promises = [];
@@ -428,11 +458,70 @@ ThumbnailGenerator.prototype._generateThumbnailsWithFfmpeg = function(segmentFil
 			promises.push(this._generateThumbnailWithFfmpeg(segmentFileLocation, time, outputPath).then((success) => {
 				return Promise.resolve(success ? outputPath : null);
 			}));
-		})(outputBaseFilePath+"-"+i+".jpg");
+		})(outputBaseFilePath+"-"+i+".png");
 		time += this._interval;
 		i++;
 	}
 	return Promise.all(promises);
+};
+
+ThumbnailGenerator.prototype._generateWaveformThumbnailsWithFfmpeg = function(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath) {
+	var time = timeIntoSegment;
+	var promises = [];
+	var i = 0;
+	while (time < segment.properties.duration) {
+		((outputPath) => {
+			promises.push(this._generateWaveformThumbnailWithFfmpeg(segmentFileLocation, time, outputPath).then((success) => {
+				return Promise.resolve(success ? outputPath : null);
+			}));
+		})(outputBaseFilePath+"-waveform-"+i+".png");
+		time += this._interval;
+		i++;
+	}
+	return Promise.all(promises);
+};
+
+ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath) {
+	var promises = [];
+	var files = [];
+	promises.push(this._generateWaveformThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath).then((files) => {
+		return Promise.resolve(files);
+	}));
+
+	promises.push(this._generateThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath).then((files) => {
+		return Promise.resolve(files);
+	}));
+	return new Promise((resolve, reject) => {
+		Promise.all(promises).then((files)=>{
+			var file1 = files[0][0];
+			var file2 = files[1][0];
+			if(!file1 || !file2)
+			{
+				reject(null);
+			}
+			else
+			{
+				var command = new Ffmpeg().input(file2)
+				.input(file1)
+				.complexFilter(["vstack"])
+				.output(outputBaseFilePath+"-combined.png")
+				.on('end', (stdout, stderr) => {
+					utils.exists(outputBaseFilePath+"-combined.png").then((exists) => {
+						// ffmpeg might fail if the time is right near the end as the duration of the file might be slightly off
+						resolve([outputBaseFilePath+"-combined.png"]);
+					}).catch((err) => {
+						reject(err);
+					});
+				})
+				.on("error", (err) => {
+					reject(err);
+				}).run();
+			}
+			
+		});
+	})
+	
+	//return Promise.resolve(files);
 };
 
 // round to 3 decimal places for ffmpeg

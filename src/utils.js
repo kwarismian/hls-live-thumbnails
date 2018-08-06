@@ -203,5 +203,6 @@ module.exports = {
 	copy: copy,
 	rename: rename,
 	move: move,
+	delete: unlink,
 	getTempDir: getTempDir
 };

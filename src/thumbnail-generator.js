@@ -41,7 +41,8 @@ function ThumbnailGenerator(options) {
 		trackType: null,
 		thumbnailHeight: null,
 		outputNamePrefix: null,
-		logger: Logger.get('ThumbnailGenerator')
+		staticImagesDir: null,
+		logger: null,
 	}, options || {});
 	if (!opts.playlistUrl) {
 		throw new Error("playlistUrl must be provided.");
@@ -65,8 +66,12 @@ function ThumbnailGenerator(options) {
 	this._thumbnailHeight = opts.thumbnailHeight;
 	this._outputDir = opts.outputDir;
 	this._tempDir = opts.tempDir;
+	this._staticImagesDir = opts.staticImagesDir;
+	this._noVideoImage = path.resolve(this._staticImagesDir, 'novideo.png');
+	this._noAudioImage = path.resolve(this._staticImagesDir, 'noaudio.png');
+
 	this._outputNamePrefix = opts.outputNamePrefix;
-	this._logger = opts.logger || nullLogger;
+	this._logger = opts.logger == true ? Logger.get('ThumbnailGenerator') : nullLogger;
 	this._trackType = opts.trackType;
 
 	this._resolvedPlaylistUrl = null;
@@ -128,7 +133,7 @@ ThumbnailGenerator.prototype.destroy = function() {
 	if (this._destroyed) {
 		return;
 	}
-	this._logger.debug("Destroyed.");
+	this._logger.info("Destroyed.");
 	if (this._grabThumbnailsTimer !== null) {
 		clearTimeout(this._grabThumbnailsTimer);
 	}
@@ -143,7 +148,7 @@ ThumbnailGenerator.prototype._buildFfmpegSize = function(w, h) {
 };
 
 ThumbnailGenerator.prototype._grabThumbnails = function() {
-	this._logger.debug("Grabbing thumbnails.");
+	this._logger.info("Grabbing thumbnails.");
 	return this._getPlaylist().then((parsed) => {
 		if (this._destroyed) {
 			return;
@@ -156,12 +161,12 @@ ThumbnailGenerator.prototype._grabThumbnails = function() {
 		}
 
 		if (this._playlistEnded) {
-			this._logger.debug("Playlist has ended.");
+			this._logger.info("Playlist has ended.");
 			return;
 		}
 
 		if (!this._hasPlaylistChanged(parsed)) {
-			this._logger.debug("Playlist hasn't changed.");
+			this._logger.info("Playlist hasn't changed.");
 			return;
 		}
 
@@ -207,7 +212,7 @@ ThumbnailGenerator.prototype._grabThumbnails = function() {
 
 		var startSegment = this._getSegmentInfoAtTime(segments, nextThumbnailTime);
 		if (!startSegment) {
-			this._logger.debug("Next thumbnail segment not available yet.");
+			this._logger.info("Next thumbnail segment not available yet.");
 			return Promise.resolve();
 		}
 
@@ -239,7 +244,7 @@ ThumbnailGenerator.prototype._grabThumbnails = function() {
 							};
 							this._lastLocation = thumbnail;
 							nextThumbnailTime = startTime + item.time + this._interval;
-							this._logger.debug("New thumbnail.", thumbnail);
+							this._logger.info("New thumbnail.", thumbnail);
 							this._emit("newThumbnail", thumbnail);
 						});
 					}).catch((err) => {
@@ -286,7 +291,7 @@ ThumbnailGenerator.prototype._grabThumbnails = function() {
 		else {
 			interval = 2000;
 		}
-		this._logger.debug("Finished grabbing thumbnails.");
+		this._logger.info("Finished grabbing thumbnails.");
 		this._grabThumbnailsTimer = setTimeout(() => {
 			this._grabThumbnails();
 		}, interval);
@@ -428,6 +433,7 @@ ThumbnailGenerator.prototype._generateThumbnailWithFfmpeg = function(segmentFile
 		})
 		.on("error", (err) => {
 			reject(err);
+			this._logger.warn("Video thumbnail generation failed");
 		}).run();
 	});
 };
@@ -449,6 +455,7 @@ ThumbnailGenerator.prototype._generateWaveformThumbnailWithFfmpeg = function(seg
 		})
 		.on("error", (err) => {
 			reject(err);
+			this._logger.warn("Audio thumbnail generation failed");
 		}).run();
 	});
 };
@@ -490,11 +497,18 @@ ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentF
 	var files = [];
 	promises.push(this._generateWaveformThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath).then((files) => {
 		return Promise.resolve(files);
+	}).catch((err) => {
+		this._logger.warn("Audio thumbnail generation failed");
+		return Promise.resolve([this._noAudioImage]);
 	}));
 
 	promises.push(this._generateThumbnailsWithFfmpeg(segmentFileLocation, segment, timeIntoSegment, outputBaseFilePath).then((files) => {
 		return Promise.resolve(files);
+	}).catch((err) => {
+		this._logger.warn("Video thumbnail generation failed");
+		return Promise.resolve([this._noVideoImage]);
 	}));
+
 	return new Promise((resolve, reject) => {
 		Promise.all(promises).then((files)=>{
 			var file1 = files[0][0];
@@ -527,11 +541,15 @@ ThumbnailGenerator.prototype._generateThumbnailsWithWaveform = function(segmentF
 				})
 				.on("error", (err) => {
 					this._clean(files).then(() => {
+						this._logger.warn("Combined tracking thumbnail generation failed");
 						reject(err);
 					});
 				}).run();
 			}
 			
+		}).catch((err) => {
+			this._logger.warn("Combined tracking thumbnail generation failed");
+			reject(err);	
 		});
 	})
 	
